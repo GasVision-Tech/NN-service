@@ -1,0 +1,38 @@
+services:
+  openvpn-client:
+    image: dperson/openvpn-client:latest
+    container_name: gasvision_openvpn_client
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - label:disable
+    volumes:
+      - ./docker/openvpn/client.ovpn:/vpn/client.ovpn:ro
+      - ./docker/openvpn/credentials.txt:/vpn/credentials.txt:ro
+    command: >
+      -f ""
+      -r 172.20.0.0/16
+      -r 172.21.0.0/16
+      -r 172.22.0.0/16
+      -r 192.168.0.0/16
+      -v /vpn/client.ovpn
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  nn-service:
+    build: .
+    container_name: gasvision_nn_service
+    env_file:
+      - .env
+    depends_on:
+      - openvpn-client
+    network_mode: "service:openvpn-client"
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config:ro
+      - ./scripts:/app/scripts:ro
+      - ./artifacts:/app/artifacts
+    command: ["bash", "/app/scripts/wait_for_vpn.sh"]
