@@ -1,48 +1,422 @@
 # nn-service
 
-Production-oriented skeleton for GasVision CV ingestion service.
+`nn-service` — это сервис компьютерного зрения для платформы **GasVision**.
 
-## What it does
-- Reads multiple RTSP streams with OpenCV.
-- Runs detector adapter on sampled frames.
-- Triggers scenario engine.
-- Saves snapshot locally.
-- Uploads snapshot to S3 through pluggable client (currently stub/local).
-- Creates event in `event-srv`.
-- Records short video clip around the event (pre/post buffer).
-- Uploads clip through the same pluggable media client.
-- Attaches clip to the existing event in `event-srv`.
+Он выполняет три основные задачи:
 
-## Why this repo is structured this way
-The CV engineer should be able to replace only detector/scenario logic without touching:
-- RTSP ingestion
-- buffering
-- event-srv integration
-- media upload flow
-- cooldown / dedup logic
-- multi-stream orchestration
+1. читает RTSP-потоки с камер через VPN;
+2. анализирует кадры с помощью детектора;
+3. отправляет события в `event-srv`.
 
-## Quick start
-1. Copy `.env.example` to `.env` and fill values.
-2. Copy `config/streams.example.yaml` to `config/streams.yaml` and edit station/camera/rtsp list.
-3. Put your OpenVPN config into `docker/openvpn/client.ovpn`.
-4. Run:
-   ```bash
-   docker compose up --build
-   
-Important notes
-docker-compose.yml uses an OpenVPN sidecar container. The app shares its network namespace via network_mode: "service:vpn".
-S3 is currently implemented as a stub local uploader returning fake URLs. Replace LocalStubMediaStorage with a real S3 implementation later.
-The default detector is an adapter around Ultralytics YOLO. It currently triggers a test scenario when a vehicle is detected.
-Event API contract matches your current event-srv:
-POST /v1/events
-POST /v1/events/{id}/media
-Safe customization points
+Сервис сделан как **production-ready каркас**, чтобы CV-инженер мог быстро встроить свой пайплайн детекции и свои сценарии, не переписывая инфраструктурную часть.
 
-CV engineer will usually touch only:
+---
 
-app/adapters/yolo_detector.py
-app/services/scenario_engine.py
-optionally app/domain/models.py if more metadata is needed
+## Что делает сервис
 
-Everything else is infrastructure around the model.
+Текущий pipeline такой:
+
+1. сервис подключается к RTSP-потокам камер;
+2. читает видеокадры через OpenCV;
+3. передает часть кадров в детектор;
+4. детектор возвращает результаты распознавания;
+5. `scenario_engine` решает, есть ли срабатывание сценария;
+6. если сценарий найден:
+   - сохраняется snapshot;
+   - snapshot загружается в storage client (сейчас это S3 stub);
+   - создается событие в `event-srv`;
+   - затем собирается короткий видеоклип;
+   - видеоклип загружается;
+   - клип прикрепляется к уже созданному событию.
+
+Сейчас как тестовый сценарий используется **обнаружение автомобиля**.
+
+---
+
+## Архитектурная идея
+
+В сервисе специально разделены:
+
+- чтение потоков;
+- детектор;
+- логика сценариев;
+- работа с медиа;
+- отправка событий;
+- оркестрация нескольких камер.
+
+Это сделано для того, чтобы CV-инженер мог менять только CV-логику, а не трогать:
+
+- VPN;
+- RTSP ingestion;
+- создание snapshot/clip;
+- загрузку медиа;
+- интеграцию с `event-srv`;
+- многопоточную обработку камер.
+
+---
+
+## Структура проекта
+
+```text
+nn-service/
+├── .env.example
+├── Dockerfile
+├── README.md
+├── docker-compose.yml
+├── requirements.txt
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── adapters/
+│   │   ├── rtsp_reader.py
+│   │   └── yolo_detector.py
+│   ├── clients/
+│   │   ├── event_service.py
+│   │   └── media_storage.py
+│   ├── core/
+│   │   ├── config.py
+│   │   └── logging.py
+│   ├── domain/
+│   │   └── models.py
+│   ├── services/
+│   │   ├── cooldown.py
+│   │   ├── frame_buffer.py
+│   │   ├── media_builder.py
+│   │   ├── pipeline.py
+│   │   ├── runner.py
+│   │   └── scenario_engine.py
+│   └── utils/
+│       └── config_loader.py
+├── config/
+│   └── streams.example.yaml
+└── docker/
+    └── openvpn/
+        └── README.md
+```
+
+---
+
+## Что где лежит
+
+### Корневые файлы
+
+#### `.env.example`
+Пример переменных окружения:
+
+- адрес `event-srv`;
+- путь к модели;
+- параметры детекции;
+- параметры клипов;
+- настройки storage.
+
+#### `docker-compose.yml`
+Запускает:
+
+- `vpn` контейнер с OpenVPN;
+- `nn-service`, который использует сеть VPN-контейнера.
+
+#### `Dockerfile`
+Собирает образ Python-сервиса.
+
+#### `requirements.txt`
+Python-зависимости:
+
+- OpenCV;
+- Ultralytics YOLO;
+- httpx;
+- pydantic;
+- yaml и др.
+
+---
+
+## Папка `app/`
+
+### `main.py`
+Точка входа в приложение.  
+Инициализирует конфиг, логирование и запускает обработку потоков.
+
+---
+
+## `app/core`
+
+### `config.py`
+Централизованная загрузка всех настроек из `.env`.
+
+### `logging.py`
+Настройка логирования.
+
+---
+
+## `app/domain`
+
+### `models.py`
+Доменные модели сервиса:
+
+- описание потока;
+- детекций;
+- триггера сценария;
+- созданного события.
+
+Это слой с типами данных, который делает код читаемым и предсказуемым.
+
+---
+
+## `app/adapters`
+
+### `rtsp_reader.py`
+Низкоуровневое чтение RTSP-потоков через OpenCV.
+
+Отвечает за:
+
+- открытие RTSP;
+- чтение кадров;
+- reconnect при временных ошибках.
+
+### `yolo_detector.py`
+Адаптер детектора.
+
+Сейчас здесь реализован тестовый детектор на базе Ultralytics YOLO, который используется для обнаружения автомобилей.
+
+**Это один из главных файлов для CV-инженера.**
+
+---
+
+## `app/clients`
+
+### `event_service.py`
+Клиент для отправки событий в `event-srv`.
+
+Сейчас используется такой контракт:
+
+- `POST /v1/events`
+- `POST /v1/events/{id}/media`
+
+### `media_storage.py`
+Клиент хранилища медиа.
+
+Сейчас это **stub-реализация**:
+
+- файл копируется в локальную папку;
+- возвращается fake URL.
+
+Когда появится реальный S3, именно здесь нужно будет заменить stub на рабочую реализацию.
+
+---
+
+## `app/services`
+
+### `runner.py`
+Запускает обработку всех камер из `streams.yaml`.
+
+### `pipeline.py`
+Главный orchestration-класс одного потока.
+
+Именно здесь реализован основной pipeline:
+
+- получение кадра;
+- детекция;
+- проверка сценария;
+- snapshot;
+- upload snapshot;
+- create event;
+- clip;
+- upload clip;
+- attach clip.
+
+### `scenario_engine.py`
+Логика принятия решения, произошел ли сценарий.
+
+Сейчас:
+
+- если найдена хотя бы одна машина, считается, что сценарий сработал.
+
+**Это второй главный файл для CV-инженера.**
+
+### `frame_buffer.py`
+Буфер кадров для pre-event части клипа.
+
+### `media_builder.py`
+Сохраняет snapshot и clip локально.
+
+### `cooldown.py`
+Ограничивает частоту повторных срабатываний одного и того же сценария по одной камере.
+
+---
+
+## `app/utils`
+
+### `config_loader.py`
+Читает `streams.yaml` и превращает его в список конфигураций потоков.
+
+---
+
+## `config/`
+
+### `streams.example.yaml`
+Пример конфигурации камер.
+
+Описывает:
+
+- `station_code`
+- `camera_code`
+- `rtsp_url`
+- `enabled`
+
+---
+
+## `docker/openvpn`
+
+### `README.md`
+Краткая инструкция по размещению OpenVPN-конфига.
+
+Обычно сюда кладется файл:
+
+```text
+docker/openvpn/pfSenseAZSC-udp-1194-gasvision-config.ovpn
+```
+
+---
+
+## Как работает обработка потока
+
+Для каждой камеры создается отдельный pipeline.
+
+### Логика работы одного pipeline:
+
+1. `RTSPReader` подключается к камере;
+2. кадры читаются последовательно;
+3. часть кадров отправляется в detector;
+4. detector возвращает detections;
+5. `scenario_engine` проверяет сценарии;
+6. если сценарий найден:
+   - сохраняется snapshot;
+   - snapshot отправляется в media storage;
+   - создается событие в `event-srv`;
+   - начинается сбор post-event кадров;
+   - собирается clip;
+   - clip отправляется в storage;
+   - clip прикрепляется к событию.
+
+---
+
+## Где CV-инженеру писать свой пайплайн
+
+CV-инженеру в первую очередь нужно работать в двух файлах:
+
+### 1. `app/adapters/yolo_detector.py`
+Здесь находится код, который получает кадр и возвращает результаты детекции.
+
+Сейчас это тестовая реализация через Ultralytics YOLO.  
+Ее можно заменить на:
+
+- собственную модель;
+- кастомный inference pipeline;
+- свой постпроцессинг;
+- свой формат обработки raw output модели.
+
+Главное — сохранить понятный выходной контракт в виде `DetectionBatch`.
+
+### 2. `app/services/scenario_engine.py`
+Здесь находится логика сценариев.
+
+Сейчас логика простая:
+- если есть хотя бы одна машина — создаем событие.
+
+Здесь CV-инженер может реализовать реальные сценарии, например:
+
+- клиент не убрал пистолет;
+- опасное поведение у колонки;
+- появление человека в запрещенной зоне;
+- наличие автомобиля в нужной зоне;
+- любые составные правила поверх детекций.
+
+---
+
+## Что CV-инженеру обычно НЕ нужно менять
+
+Обычно не нужно трогать:
+
+- `rtsp_reader.py`
+- `event_service.py`
+- `media_storage.py`
+- `runner.py`
+- `pipeline.py`
+- `frame_buffer.py`
+- `media_builder.py`
+
+Эти файлы отвечают за инфраструктуру сервиса, а не за CV-логику.
+
+---
+
+## Что сейчас реализовано как заглушка
+
+На текущем этапе заглушками являются:
+
+### Детекция
+Используется тестовое распознавание автомобилей.
+
+### S3
+Вместо настоящего S3 сейчас используется локальный stub uploader.
+
+### Сценарии
+Вместо реальных CV-сценариев сейчас используется один тестовый сценарий:
+**обнаружена машина**.
+
+---
+
+## Что важно при дальнейшем развитии
+
+При развитии сервиса рекомендуется:
+
+1. не смешивать код модели и код инфраструктуры;
+2. всю логику сценариев держать отдельно от логики inference;
+3. все интеграции с внешними сервисами держать в `clients/`;
+4. не изменять контракт event-service без необходимости;
+5. не завязывать CV-логику на конкретный storage backend.
+
+---
+
+## Кратко: куда смотреть разным участникам команды
+
+### Backend / integration engineer
+Основные файлы:
+
+- `app/clients/event_service.py`
+- `app/clients/media_storage.py`
+- `app/services/pipeline.py`
+- `docker-compose.yml`
+
+### CV engineer
+Основные файлы:
+
+- `app/adapters/yolo_detector.py`
+- `app/services/scenario_engine.py`
+- `app/domain/models.py`
+
+### DevOps / infra
+Основные файлы:
+
+- `docker-compose.yml`
+- `Dockerfile`
+- `.env.example`
+- `docker/openvpn/`
+
+---
+
+## Итог
+
+`nn-service` уже содержит готовый каркас для production-подхода:
+
+- многопоточная обработка нескольких камер;
+- устойчивое чтение RTSP;
+- отделение детектора от сценариев;
+- работа со snapshot и clip;
+- интеграция с `event-srv`;
+- подготовленная точка для замены stub storage на реальный S3.
+
+Главная идея проекта — дать CV-инженеру возможность сосредоточиться только на:
+- модели,
+- детекциях,
+- сценариях,
+
+а не тратить время на инфраструктурную обвязку.
