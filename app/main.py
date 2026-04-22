@@ -1,20 +1,17 @@
-from contextlib import asynccontextmanager
+from __future__ import annotations
 
-from fastapi import FastAPI
-
-from app.api.routes import router
+from app.core.config import get_settings
 from app.core.logging import setup_logging
-from app.services.runtime import pipeline_service
-
-setup_logging()
+from app.services.runner import PipelineRunner
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    pipeline_service.start()
-    yield
-    pipeline_service.stop()
+def main() -> None:
+    settings = get_settings()
+    setup_logging(settings.log_level)
+    runner = PipelineRunner(settings)
+    runner.start()
+    runner.join()
 
 
-app = FastAPI(title='gasvision-nn-service', lifespan=lifespan)
-app.include_router(router)
+if __name__ == "__main__":
+    main()

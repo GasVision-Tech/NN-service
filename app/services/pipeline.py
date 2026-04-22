@@ -1,60 +1,142 @@
+from __future__ import annotations
+
 import logging
 import threading
-from pathlib import Path
+import time
+from datetime import datetime, timezone
 
-import yaml
-
-from app.clients.event_client import EventClient
-from app.models.camera import CameraConfig
-from app.services.detector import YoloDetector
-from app.services.rtsp_worker import RtspWorker
+from app.adapters.rtsp_reader import RTSPReader
+from app.adapters.yolo_detector import Detector
+from app.clients.event_service import EventServiceClient
+from app.clients.media_storage import MediaStorage, build_object_key
+from app.domain.models import ScenarioTrigger, StreamConfig
+from app.services.cooldown import TriggerCooldown
+from app.services.frame_buffer import FrameRingBuffer, TimedFrame
+from app.services.media_builder import MediaBuilder
+from app.services.scenario_engine import ScenarioEngine
 
 logger = logging.getLogger(__name__)
 
 
-class PipelineService:
-    def __init__(self, cameras_config_path: str) -> None:
-        self.cameras_config_path = Path(cameras_config_path)
-        self.detector = YoloDetector()
-        self.event_client = EventClient()
-        self.workers: list[RtspWorker] = []
-        self.threads: list[threading.Thread] = []
+class StreamPipeline:
+    def __init__(
+        self,
+        *,
+        stream: StreamConfig,
+        detector: Detector,
+        scenario_engine: ScenarioEngine,
+        event_client: EventServiceClient,
+        media_storage: MediaStorage,
+        media_builder: MediaBuilder,
+        frame_sample_every_n: int,
+        buffer_frame_count: int,
+        post_event_record_seconds: int,
+        clip_fps: int,
+        reconnect_delay_seconds: int,
+        cooldown: TriggerCooldown,
+        media_bucket: str,
+    ) -> None:
+        self._stream = stream
+        self._detector = detector
+        self._scenario_engine = scenario_engine
+        self._event_client = event_client
+        self._media_storage = media_storage
+        self._media_builder = media_builder
+        self._frame_sample_every_n = max(frame_sample_every_n, 1)
+        self._post_event_record_seconds = post_event_record_seconds
+        self._clip_fps = clip_fps
+        self._cooldown = cooldown
+        self._media_bucket = media_bucket
+        self._reader = RTSPReader(stream.rtsp_url, reconnect_delay_seconds=reconnect_delay_seconds)
+        self._buffer = FrameRingBuffer(maxlen=buffer_frame_count)
+        self._frame_counter = 0
 
-    def start(self) -> None:
-        cameras = self._load_cameras()
-        enabled_cameras = [camera for camera in cameras if camera.enabled]
-        logger.info("Loaded cameras total=%s enabled=%s", len(cameras), len(enabled_cameras))
+    def run_forever(self) -> None:
+        logger.info(
+            "Starting stream pipeline: station=%s camera=%s",
+            self._stream.station_code,
+            self._stream.camera_code,
+        )
+        for frame in self._reader.frames():
+            self._buffer.append(frame)
+            self._frame_counter += 1
+            if self._frame_counter % self._frame_sample_every_n != 0:
+                continue
 
-        for camera in enabled_cameras:
-            worker = RtspWorker(camera=camera, detector=self.detector, event_client=self.event_client)
-            thread = threading.Thread(target=worker.run_forever, daemon=True, name=f"camera-{camera.camera_code}")
-            self.workers.append(worker)
-            self.threads.append(thread)
-            thread.start()
-            logger.info("Started worker camera=%s", camera.camera_code)
+            batch = self._detector.detect(frame)
+            trigger = self._scenario_engine.evaluate(
+                station_code=self._stream.station_code,
+                camera_code=self._stream.camera_code,
+                frame=frame,
+                batch=batch,
+            )
+            if trigger is None:
+                continue
 
-    def stop(self) -> None:
-        for worker in self.workers:
-            worker.stop()
+            cooldown_key = f"{self._stream.station_code}:{self._stream.camera_code}:{trigger.scenario_key}"
+            if not self._cooldown.allow(cooldown_key):
+                logger.info("Trigger suppressed by cooldown: %s", cooldown_key)
+                continue
 
-    def status(self) -> dict:
-        return {
-            "workers": [
-                {
-                    "camera_code": worker.state.camera_code,
-                    "stream_opened": worker.state.stream_opened,
-                    "object_present": worker.state.object_present,
-                    "last_target_count": worker.state.last_target_count,
-                    "sent_events": worker.state.sent_events,
-                    "read_errors": worker.state.read_errors,
-                }
-                for worker in self.workers
-            ]
-        }
+            self._handle_trigger(trigger)
 
-    def _load_cameras(self) -> list[CameraConfig]:
-        with self.cameras_config_path.open("r", encoding="utf-8") as file:
-            raw_data = yaml.safe_load(file) or {}
+    def _handle_trigger(self, trigger: ScenarioTrigger) -> None:
+        snapshot_name = self._build_filename(trigger, suffix="jpg")
+        snapshot_path = self._media_builder.save_snapshot(snapshot_name, trigger.snapshot_frame)
+        image_key = build_object_key(
+            trigger.station_code,
+            trigger.camera_code,
+            trigger.scenario_key,
+            suffix="jpg",
+        )
+        image_url = self._media_storage.upload_file(
+            local_path=snapshot_path,
+            bucket=self._media_bucket,
+            object_key=image_key,
+        )
+        created = self._event_client.create_event(trigger, image_url)
 
-        cameras_raw = raw_data.get("cameras", [])
-        return [CameraConfig.model_validate(item) for item in cameras_raw]
+        thread = threading.Thread(
+            target=self._finalize_clip,
+            args=(created.event_id, trigger),
+            daemon=True,
+        )
+        thread.start()
+
+    def _finalize_clip(self, event_id: int, trigger: ScenarioTrigger) -> None:
+        pre_frames = self._buffer.snapshot()
+        logger.info("Collecting post-event frames for event=%s", event_id)
+        deadline = time.time() + self._post_event_record_seconds
+        post_frames: list[TimedFrame] = []
+
+        clip_reader = RTSPReader(self._stream.rtsp_url, reconnect_delay_seconds=3)
+        try:
+            for frame in clip_reader.frames():
+                timed = TimedFrame(frame=frame.copy(), ts=datetime.now(timezone.utc))
+                post_frames.append(timed)
+                if time.time() >= deadline:
+                    break
+        finally:
+            clip_reader.close()
+
+        clip_frames = pre_frames + post_frames
+        clip_name = self._build_filename(trigger, suffix="mp4")
+        clip_path = self._media_builder.save_clip(clip_name, clip_frames, fps=self._clip_fps)
+        clip_key = build_object_key(
+            trigger.station_code,
+            trigger.camera_code,
+            trigger.scenario_key,
+            suffix="mp4",
+        )
+        clip_url = self._media_storage.upload_file(
+            local_path=clip_path,
+            bucket=self._media_bucket,
+            object_key=clip_key,
+        )
+        self._event_client.attach_clip(event_id=event_id, clip_url=clip_url)
+        logger.info("Clip attached to event=%s", event_id)
+
+    @staticmethod
+    def _build_filename(trigger: ScenarioTrigger, suffix: str) -> str:
+        ts = trigger.triggered_at.strftime("%Y%m%dT%H%M%S%f")
+        return f"{trigger.station_code}_{trigger.camera_code}_{trigger.scenario_key}_{ts}.{suffix}"

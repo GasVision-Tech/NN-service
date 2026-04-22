@@ -1,13 +1,10 @@
 import logging
-
-from app.core.config import settings
-
-
-LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+import sys
 
 
-def setup_logging() -> None:
+def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format=LOG_FORMAT,
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        stream=sys.stdout,
     )

@@ -1,38 +1,33 @@
 services:
-  openvpn-client:
+  vpn:
     image: dperson/openvpn-client:latest
-    container_name: gasvision_openvpn_client
+    container_name: gasvision-vpn
     cap_add:
       - NET_ADMIN
     devices:
-      - /dev/net/tun:/dev/net/tun
+      - /dev/net/tun
     security_opt:
       - label:disable
     volumes:
-      - ./docker/openvpn/client.ovpn:/vpn/client.ovpn:ro
-      - ./docker/openvpn/credentials.txt:/vpn/credentials.txt:ro
-    command: >
-      -f ""
-      -r 172.20.0.0/16
-      -r 172.21.0.0/16
-      -r 172.22.0.0/16
-      -r 192.168.0.0/16
-      -v /vpn/client.ovpn
-    restart: unless-stopped
+      - ./docker/openvpn:/vpn
+    environment:
+      TZ: Europe/Warsaw
+      VPN_FILES: pfSenseAZSC-udp-1194-gasvision-config.ovpn
+      DEFAULT_GATEWAY: "false"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 
   nn-service:
     build: .
-    container_name: gasvision_nn_service
+    container_name: gasvision-nn-service
+    network_mode: "service:vpn"
+    depends_on:
+      - vpn
     env_file:
       - .env
-    depends_on:
-      - openvpn-client
-    network_mode: "service:openvpn-client"
-    restart: unless-stopped
     volumes:
-      - ./config:/app/config:ro
-      - ./scripts:/app/scripts:ro
-      - ./artifacts:/app/artifacts
-    command: ["bash", "/app/scripts/wait_for_vpn.sh"]
+      - ./config:/app/config
+      - ./storage:/tmp/nn-service-media
+      - ./models:/app/models
+    restart: unless-stopped

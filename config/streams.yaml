@@ -1,0 +1,25 @@
+streams:
+  - station_code: AZS-001
+    camera_code: CAM-167
+    rtsp_url: rtsp://admin:admin@172.20.36.167:554/live/sub
+    enabled: true
+  - station_code: AZS-001
+    camera_code: CAM-170
+    rtsp_url: rtsp://admin:admin@172.20.36.170:554/live/sub
+    enabled: true
+  - station_code: AZS-001
+    camera_code: CAM-169B
+    rtsp_url: rtsp://admin:admin@172.20.36.169:554/live/sub
+    enabled: true
+  - station_code: AZS-001
+    camera_code: CAM-172
+    rtsp_url: rtsp://admin:admin@172.20.36.172:554/live/sub
+    enabled: true
+  - station_code: AZS-001
+    camera_code: CAM-171
+    rtsp_url: rtsp://admin:admin@172.20.36.171:554/live/sub
+    enabled: true
+  - station_code: AZS-001
+    camera_code: CAM-168
+    rtsp_url: rtsp://admin:admin@172.20.36.168:554/live/sub
+    enabled: true
