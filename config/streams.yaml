@@ -1,25 +1,40 @@
+# zones_config_path — путь до JSON с полигонами для конкретной камеры.
+# Если не указан или файл отсутствует — сценарии "долго на АЗС" и "машина
+# долго у колонки" работают на full-frame; person_in_forbidden и
+# person_without_car_at_column тогда не стреляют (для них нужны зоны).
 streams:
   - station_code: AZS-001
     camera_code: CAM-167
     rtsp_url: rtsp://admin:admin@172.20.36.167:554/live/sub
     enabled: true
-  - station_code: AZS-001
-    camera_code: CAM-170
-    rtsp_url: rtsp://admin:admin@172.20.36.170:554/live/sub
-    enabled: true
-  - station_code: AZS-001
-    camera_code: CAM-169B
-    rtsp_url: rtsp://admin:admin@172.20.36.169:554/live/sub
-    enabled: true
-  - station_code: AZS-001
-    camera_code: CAM-172
-    rtsp_url: rtsp://admin:admin@172.20.36.172:554/live/sub
-    enabled: true
-  - station_code: AZS-001
-    camera_code: CAM-171
-    rtsp_url: rtsp://admin:admin@172.20.36.171:554/live/sub
-    enabled: true
+    zones_config_path: /app/config/zones/CAM-167.json
+
   - station_code: AZS-001
     camera_code: CAM-168
     rtsp_url: rtsp://admin:admin@172.20.36.168:554/live/sub
     enabled: true
+    zones_config_path: /app/config/zones/CAM-168.json
+
+  - station_code: AZS-001
+    camera_code: CAM-169B
+    rtsp_url: rtsp://admin:admin@172.20.36.169:554/live/sub
+    enabled: true
+    zones_config_path: /app/config/zones/CAM-169B.json
+
+  - station_code: AZS-001
+    camera_code: CAM-170
+    rtsp_url: rtsp://admin:admin@172.20.36.170:554/live/sub
+    enabled: true
+    zones_config_path: /app/config/zones/CAM-170.json
+
+  - station_code: AZS-001
+    camera_code: CAM-171
+    rtsp_url: rtsp://admin:admin@172.20.36.171:554/live/sub
+    enabled: true
+    zones_config_path: /app/config/zones/CAM-171.json
+
+  - station_code: AZS-001
+    camera_code: CAM-172
+    rtsp_url: rtsp://admin:admin@172.20.36.172:554/live/sub
+    enabled: true
+    zones_config_path: /app/config/zones/CAM-172.json

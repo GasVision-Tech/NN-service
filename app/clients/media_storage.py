@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from pathlib import Path
 import shutil
+from datetime import datetime, timezone
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -36,5 +36,6 @@ class LocalStubMediaStorage(MediaStorage):
 
 def build_object_key(*parts: str, suffix: str) -> str:
     safe_parts = [part.replace(" ", "_") for part in parts]
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+    # timezone-aware UTC (datetime.utcnow() устарел в 3.12)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
     return "/".join([*safe_parts, f"{timestamp}.{suffix.lstrip('.')}"])

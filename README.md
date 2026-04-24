@@ -1,422 +1,287 @@
 # nn-service
 
-`nn-service` — это сервис компьютерного зрения для платформы **GasVision**.
+`nn-service` — CV-сервис платформы **GasVision**. Читает RTSP с камер АЗС
+через VPN, прогоняет кадры через YOLO + ByteTrack, проверяет сценарии по
+зонам и шлёт события с snapshot/клипом в `event-service`.
 
-Он выполняет три основные задачи:
-
-1. читает RTSP-потоки с камер через VPN;
-2. анализирует кадры с помощью детектора;
-3. отправляет события в `event-srv`.
-
-Сервис сделан как **production-ready каркас**, чтобы CV-инженер мог быстро встроить свой пайплайн детекции и свои сценарии, не переписывая инфраструктурную часть.
+Проект построен как production-ready каркас: инфраструктурная часть (VPN,
+RTSP reconnect, snapshot/clip, upload, HTTP-клиент event-service)
+отделена от CV-логики. CV-инженер меняет только детектор и сценарии и не
+трогает остальное.
 
 ---
 
 ## Что делает сервис
 
-Текущий pipeline такой:
+На каждую камеру поднимается отдельный pipeline-поток:
 
-1. сервис подключается к RTSP-потокам камер;
-2. читает видеокадры через OpenCV;
-3. передает часть кадров в детектор;
-4. детектор возвращает результаты распознавания;
-5. `scenario_engine` решает, есть ли срабатывание сценария;
-6. если сценарий найден:
-   - сохраняется snapshot;
-   - snapshot загружается в storage client (сейчас это S3 stub);
-   - создается событие в `event-srv`;
-   - затем собирается короткий видеоклип;
-   - видеоклип загружается;
-   - клип прикрепляется к уже созданному событию.
+1. `RTSPReader` держит RTSP-соединение, переподключается после обрывов.
+2. Каждый кадр попадает в `FrameRingBuffer` (pre-event буфер, 5 сек).
+3. Каждый N-й кадр (дефолт `N=5`) идёт в `YoloTrackingDetector` — YOLO + ByteTrack
+   со своим tracker-state на камеру.
+4. `ZoneScenarioEngine` прогоняет 4 сценария поверх детекций и зон.
+5. При срабатывании сценария:
+   - сохраняется аннотированный snapshot;
+   - snapshot загружается в storage client (сейчас — stub в локальную папку);
+   - `POST /v1/events` в event-service создаёт событие;
+   - отдельный поток собирает post-event клип (ещё 5 сек после триггера),
+     сшивает с pre-event буфером и прикрепляет к событию через
+     `POST /v1/events/{id}/media`.
 
-Сейчас как тестовый сценарий используется **обнаружение автомобиля**.
+Параллельно каждый обработанный кадр (с bbox и track-id) пишется в
+`storage/detections/<CAM>/latest.jpg` — это source для локального viewer-а
+на ноуте.
 
 ---
 
-## Архитектурная идея
+## Сценарии
 
-В сервисе специально разделены:
+Реализованы 4 сценария, все с per-(event_type, track_id) кулдауном:
 
-- чтение потоков;
-- детектор;
-- логика сценариев;
-- работа с медиа;
-- отправка событий;
-- оркестрация нескольких камер.
+| Ключ                              | Условие                                                                | Таймер                   | Severity |
+|-----------------------------------|------------------------------------------------------------------------|--------------------------|----------|
+| `person_in_forbidden_zone`        | Человек в запретной зоне                                               | 0 сек (мгновенно)        | high     |
+| `person_without_car_at_column`    | Человек у колонки дольше порога, при этом рядом нет машины             | `PERSON_WITHOUT_CAR_SEC` | med      |
+| `person_too_long_at_station`      | Человек на территории АЗС дольше порога                                | `PERSON_TOO_LONG_*_SEC`  | med      |
+| `car_too_long_at_column`          | Машина у колонки дольше порога                                         | `CAR_TOO_LONG_SEC`       | low      |
 
-Это сделано для того, чтобы CV-инженер мог менять только CV-логику, а не трогать:
+Для `person_in_forbidden_zone` и `person_without_car_at_column` нужна зонная
+разметка. Для `person_too_long_at_station` и `car_too_long_at_column` при
+отсутствии JSON зон включается full-frame fallback (вся картинка как
+station/column).
 
-- VPN;
-- RTSP ingestion;
-- создание snapshot/clip;
-- загрузку медиа;
-- интеграцию с `event-srv`;
-- многопоточную обработку камер.
+ReID (`REID_GRACE_SEC`, `REID_RADIUS_PX`) склеивает одного и того же трека,
+когда YOLO на пару кадров теряет его и присваивает новый track_id.
 
 ---
 
 ## Структура проекта
 
-```text
+```
 nn-service/
-├── .env.example
+├── .env                      # шаблон env'ов (реальные креды — в .env.local)
+├── .gitignore                # игнорит venv/storage/__pycache__/заметки
+├── .dockerignore
 ├── Dockerfile
-├── README.md
-├── docker-compose.yml
+├── docker-compose.yml        # vpn + nn-service (network_mode: service:vpn)
 ├── requirements.txt
+├── README.md                 # этот файл
+├── ARCHITECTURE.md           # поток данных + потоки + storage
+├── RUNBOOK.md                # пошаговый запуск и диагностика
+│
 ├── app/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── adapters/
-│   │   ├── rtsp_reader.py
-│   │   └── yolo_detector.py
-│   ├── clients/
-│   │   ├── event_service.py
-│   │   └── media_storage.py
+│   ├── main.py               # entrypoint: config → logging → runner
 │   ├── core/
-│   │   ├── config.py
+│   │   ├── config.py         # Pydantic Settings из .env
 │   │   └── logging.py
 │   ├── domain/
-│   │   └── models.py
+│   │   └── models.py         # StreamConfig, Detection, ScenarioTrigger, …
+│   ├── adapters/
+│   │   ├── rtsp_reader.py    # VideoCapture + reconnect loop
+│   │   ├── yolo_detector.py  # YoloVehicleDetector + YoloTrackingDetector
+│   │   └── zone_manager.py   # Zone, load_zones, point_in_zone, draw_zones
 │   ├── services/
-│   │   ├── cooldown.py
-│   │   ├── frame_buffer.py
-│   │   ├── media_builder.py
-│   │   ├── pipeline.py
-│   │   ├── runner.py
-│   │   └── scenario_engine.py
+│   │   ├── runner.py                # поднимает pipeline на каждую камеру
+│   │   ├── pipeline.py              # orchestration одной камеры
+│   │   ├── zone_scenario_engine.py  # evaluate() → [ScenarioTrigger]
+│   │   ├── event_tracker.py         # ReID + стейт 4 сценариев
+│   │   ├── frame_buffer.py          # ring-buffer pre-event кадров
+│   │   ├── media_builder.py         # snapshot + clip на диск
+│   │   ├── cooldown.py              # camera-level кулдаун
+│   │   └── scenario_engine.py       # compat-shim → ZoneScenarioEngine
+│   ├── clients/
+│   │   ├── event_service.py  # httpx POST /v1/events /v1/events/{id}/media
+│   │   └── media_storage.py  # LocalStubMediaStorage (замена на S3 позже)
+│   ├── api/
+│   │   ├── frame_store.py    # thread-safe {camera_code: jpeg}
+│   │   └── viewer.py         # FastAPI MJPEG (опционально, off by default)
 │   └── utils/
-│       └── config_loader.py
+│       ├── config_loader.py  # streams.yaml → [StreamConfig]
+│       └── draw.py           # bbox + label на кадр
+│
 ├── config/
-│   └── streams.example.yaml
-└── docker/
-    └── openvpn/
-        └── README.md
+│   ├── streams.yaml          # список камер (station_code/camera_code/rtsp)
+│   └── zones/
+│       ├── _template.json    # шаблон, коммитится
+│       ├── README.md         # как размечать зоны
+│       └── CAM-XXX.json      # per-camera зоны (в .gitignore)
+│
+├── scripts/
+│   ├── draw_zones.py         # интерактивная разметка (cv2.imshow на ноуте)
+│   └── view_cameras.py       # локальный просмотр storage/detections/<CAM>/latest.jpg
+│
+├── models/
+│   └── yolov8n.pt            # веса (nano, ~6 MB — коммитить дальше на усмотрение)
+│
+├── docker/
+│   └── openvpn/
+│       └── README.md
+│
+└── storage/                  # runtime-output, в .gitignore
+    ├── detections/<CAM>/latest.jpg
+    ├── snapshots/
+    ├── clips/
+    └── gasvision-media/<station>/<camera>/…
 ```
 
 ---
 
-## Что где лежит
+## Основные компоненты
 
-### Корневые файлы
+### `app/adapters/yolo_detector.py` — где CV-инженер живёт, #1
 
-#### `.env.example`
-Пример переменных окружения:
+Два детектора:
+- `YoloVehicleDetector` — stateless, для простой детекции без трекинга.
+- `YoloTrackingDetector` — YOLO + ByteTrack со стабильным `track_id`. **Важно:**
+  tracker-state хранится внутри инстанса YOLO, поэтому на каждую камеру
+  создаётся свой `YoloTrackingDetector` (это делает `runner.py`).
 
-- адрес `event-srv`;
-- путь к модели;
-- параметры детекции;
-- параметры клипов;
-- настройки storage.
+Контракт выхода — `DetectionBatch(detections=[Detection(label, bbox, confidence, track_id)])`.
 
-#### `docker-compose.yml`
-Запускает:
+Менять модель/постпроцессинг — здесь.
 
-- `vpn` контейнер с OpenVPN;
-- `nn-service`, который использует сеть VPN-контейнера.
+### `app/services/zone_scenario_engine.py` + `event_tracker.py` — CV-логика, #2
 
-#### `Dockerfile`
-Собирает образ Python-сервиса.
+`ZoneScenarioEngine.evaluate(frame, batch)` прогоняет 4 сценария и
+возвращает `list[ScenarioTrigger]`. Состояние (когда трек впервые попал
+в зону, когда последний раз видели, когда последний раз алертили) лежит
+в `EventTracker`. ReID — там же.
 
-#### `requirements.txt`
-Python-зависимости:
+Менять правила/сценарии — здесь.
 
-- OpenCV;
-- Ultralytics YOLO;
-- httpx;
-- pydantic;
-- yaml и др.
+### `app/adapters/zone_manager.py`
 
----
+`load_zones_or_fallback()` читает JSON с полигонами. Если файл отсутствует —
+подставляет station/column на весь кадр (из `FALLBACK_FRAME_WIDTH/HEIGHT`),
+чтобы таймерные сценарии работали до разметки.
 
-## Папка `app/`
+### `app/services/pipeline.py` — orchestration
 
-### `main.py`
-Точка входа в приложение.  
-Инициализирует конфиг, логирование и запускает обработку потоков.
+- Гоняет цикл по кадрам из `RTSPReader`.
+- Публикует аннотированный кадр в `FrameStore` и на диск для локального viewer-а.
+- При триггере проверяет camera-level `TriggerCooldown` (дополнительный слой
+  поверх EventTracker), делает snapshot+event+клип.
+- Один сломанный триггер не кладёт pipeline-поток (всё в `try/except`).
 
----
+### `app/clients/event_service.py`
 
-## `app/core`
+Синхронный httpx. Два эндпоинта:
+- `POST /v1/events` — создание события, возвращает `event_id`;
+- `POST /v1/events/{id}/media` — прикрепление URL клипа.
 
-### `config.py`
-Централизованная загрузка всех настроек из `.env`.
+### `app/clients/media_storage.py`
 
-### `logging.py`
-Настройка логирования.
-
----
-
-## `app/domain`
-
-### `models.py`
-Доменные модели сервиса:
-
-- описание потока;
-- детекций;
-- триггера сценария;
-- созданного события.
-
-Это слой с типами данных, который делает код читаемым и предсказуемым.
+`LocalStubMediaStorage` копирует файл в папку, отдаёт fake-URL.
+Когда появится реальный S3/minio — заменить только этот класс, интерфейс
+`MediaStorage.upload_file(...)` уже правильный.
 
 ---
 
-## `app/adapters`
+## Запуск локально
 
-### `rtsp_reader.py`
-Низкоуровневое чтение RTSP-потоков через OpenCV.
+Подробный runbook — в `RUNBOOK.md`. TL;DR:
 
-Отвечает за:
+```bash
+# 1) event-service (Postgres + FastAPI на :8000) — из его репо:
+cd ~/job/Event-service && docker compose up -d
 
-- открытие RTSP;
-- чтение кадров;
-- reconnect при временных ошибках.
+# 2) положить VPN-конфиг
+cp ~/Downloads/pfSenseAZSC-udp-1194-gasvision-config.ovpn \
+   ~/job/NN-service/docker/openvpn/
 
-### `yolo_detector.py`
-Адаптер детектора.
+# 3) nn-service
+cd ~/job/NN-service
+docker compose build nn-service
+docker compose up -d
+docker compose logs -f nn-service
 
-Сейчас здесь реализован тестовый детектор на базе Ultralytics YOLO, который используется для обнаружения автомобилей.
-
-**Это один из главных файлов для CV-инженера.**
-
----
-
-## `app/clients`
-
-### `event_service.py`
-Клиент для отправки событий в `event-srv`.
-
-Сейчас используется такой контракт:
-
-- `POST /v1/events`
-- `POST /v1/events/{id}/media`
-
-### `media_storage.py`
-Клиент хранилища медиа.
-
-Сейчас это **stub-реализация**:
-
-- файл копируется в локальную папку;
-- возвращается fake URL.
-
-Когда появится реальный S3, именно здесь нужно будет заменить stub на рабочую реализацию.
-
----
-
-## `app/services`
-
-### `runner.py`
-Запускает обработку всех камер из `streams.yaml`.
-
-### `pipeline.py`
-Главный orchestration-класс одного потока.
-
-Именно здесь реализован основной pipeline:
-
-- получение кадра;
-- детекция;
-- проверка сценария;
-- snapshot;
-- upload snapshot;
-- create event;
-- clip;
-- upload clip;
-- attach clip.
-
-### `scenario_engine.py`
-Логика принятия решения, произошел ли сценарий.
-
-Сейчас:
-
-- если найдена хотя бы одна машина, считается, что сценарий сработал.
-
-**Это второй главный файл для CV-инженера.**
-
-### `frame_buffer.py`
-Буфер кадров для pre-event части клипа.
-
-### `media_builder.py`
-Сохраняет snapshot и clip локально.
-
-### `cooldown.py`
-Ограничивает частоту повторных срабатываний одного и того же сценария по одной камере.
-
----
-
-## `app/utils`
-
-### `config_loader.py`
-Читает `streams.yaml` и превращает его в список конфигураций потоков.
-
----
-
-## `config/`
-
-### `streams.example.yaml`
-Пример конфигурации камер.
-
-Описывает:
-
-- `station_code`
-- `camera_code`
-- `rtsp_url`
-- `enabled`
-
----
-
-## `docker/openvpn`
-
-### `README.md`
-Краткая инструкция по размещению OpenVPN-конфига.
-
-Обычно сюда кладется файл:
-
-```text
-docker/openvpn/pfSenseAZSC-udp-1194-gasvision-config.ovpn
+# 4) локальный просмотр камер (на хосте, не в докере):
+python scripts/view_cameras.py --storage ./storage
 ```
 
----
-
-## Как работает обработка потока
-
-Для каждой камеры создается отдельный pipeline.
-
-### Логика работы одного pipeline:
-
-1. `RTSPReader` подключается к камере;
-2. кадры читаются последовательно;
-3. часть кадров отправляется в detector;
-4. detector возвращает detections;
-5. `scenario_engine` проверяет сценарии;
-6. если сценарий найден:
-   - сохраняется snapshot;
-   - snapshot отправляется в media storage;
-   - создается событие в `event-srv`;
-   - начинается сбор post-event кадров;
-   - собирается clip;
-   - clip отправляется в storage;
-   - clip прикрепляется к событию.
+Web viewer (`app/api/viewer.py`, FastAPI/MJPEG) **отключён по умолчанию**
+(`VIEWER_ENABLED=false`) — при `network_mode: "service:vpn"` без `ports` на
+хост его всё равно не пробросить. Вместо него — `scripts/view_cameras.py`,
+который читает те же аннотированные JPEG из `storage/detections/<CAM>/latest.jpg`.
 
 ---
 
-## Где CV-инженеру писать свой пайплайн
+## Конфиг
 
-CV-инженеру в первую очередь нужно работать в двух файлах:
+Все настройки — в `.env`. Ключевое:
 
-### 1. `app/adapters/yolo_detector.py`
-Здесь находится код, который получает кадр и возвращает результаты детекции.
+```dotenv
+EVENT_SERVICE_BASE_URL=http://host.docker.internal:8000
 
-Сейчас это тестовая реализация через Ultralytics YOLO.  
-Ее можно заменить на:
+YOLO_MODEL_PATH=/app/models/yolov8n.pt
+YOLO_DEVICE=cpu                 # cuda:0 при GPU
+YOLO_TRACKER_CONFIG=bytetrack.yaml
+YOLO_CLASSES=person,car,bus,truck,motorcycle
 
-- собственную модель;
-- кастомный inference pipeline;
-- свой постпроцессинг;
-- свой формат обработки raw output модели.
+FRAME_SAMPLE_EVERY_N=5
+DETECTION_CONFIDENCE=0.35
 
-Главное — сохранить понятный выходной контракт в виде `DetectionBatch`.
+PERSON_WITHOUT_CAR_SEC=30
+PERSON_TOO_LONG_AT_STATION_SEC=120
+CAR_TOO_LONG_SEC=300
+EVENT_COOLDOWN_SEC=60
 
-### 2. `app/services/scenario_engine.py`
-Здесь находится логика сценариев.
+REID_GRACE_SEC=8
+REID_RADIUS_PX=150
 
-Сейчас логика простая:
-- если есть хотя бы одна машина — создаем событие.
+PRE_EVENT_BUFFER_SECONDS=5
+POST_EVENT_RECORD_SECONDS=5
+CLIP_FPS=10
 
-Здесь CV-инженер может реализовать реальные сценарии, например:
+VIEWER_ENABLED=false
+```
 
-- клиент не убрал пистолет;
-- опасное поведение у колонки;
-- появление человека в запрещенной зоне;
-- наличие автомобиля в нужной зоне;
-- любые составные правила поверх детекций.
-
----
-
-## Что CV-инженеру обычно НЕ нужно менять
-
-Обычно не нужно трогать:
-
-- `rtsp_reader.py`
-- `event_service.py`
-- `media_storage.py`
-- `runner.py`
-- `pipeline.py`
-- `frame_buffer.py`
-- `media_builder.py`
-
-Эти файлы отвечают за инфраструктуру сервиса, а не за CV-логику.
+Полная таблица всех переменных — в `RUNBOOK.md §3`.
 
 ---
 
-## Что сейчас реализовано как заглушка
+## Разметка зон
 
-На текущем этапе заглушками являются:
+Запускается **локально на ноуте** (нужен GUI для `cv2.imshow`):
 
-### Детекция
-Используется тестовое распознавание автомобилей.
+```bash
+python scripts/draw_zones.py \
+    --rtsp rtsp://admin:admin@172.20.36.167:554/live/sub \
+    --camera-code CAM-167
+```
 
-### S3
-Вместо настоящего S3 сейчас используется локальный stub uploader.
+Хоткеи: `LMB`/`RMB` — точка/закрыть полигон, `f`/`c`/`s` — тип зоны
+(forbidden/column/station), `w` — сохранить JSON, `q` — выход.
 
-### Сценарии
-Вместо реальных CV-сценариев сейчас используется один тестовый сценарий:
-**обнаружена машина**.
+Файлы `config/zones/CAM-XXX.json` попадают в контейнер через маунт
+`./config:/app/config`, пересборка не нужна.
 
----
-
-## Что важно при дальнейшем развитии
-
-При развитии сервиса рекомендуется:
-
-1. не смешивать код модели и код инфраструктуры;
-2. всю логику сценариев держать отдельно от логики inference;
-3. все интеграции с внешними сервисами держать в `clients/`;
-4. не изменять контракт event-service без необходимости;
-5. не завязывать CV-логику на конкретный storage backend.
+Подробности — в `config/zones/README.md`.
 
 ---
 
-## Кратко: куда смотреть разным участникам команды
+## Что сейчас заглушка
 
-### Backend / integration engineer
-Основные файлы:
-
-- `app/clients/event_service.py`
-- `app/clients/media_storage.py`
-- `app/services/pipeline.py`
-- `docker-compose.yml`
-
-### CV engineer
-Основные файлы:
-
-- `app/adapters/yolo_detector.py`
-- `app/services/scenario_engine.py`
-- `app/domain/models.py`
-
-### DevOps / infra
-Основные файлы:
-
-- `docker-compose.yml`
-- `Dockerfile`
-- `.env.example`
-- `docker/openvpn/`
+- **Media storage** — `LocalStubMediaStorage` копирует в папку и возвращает
+  fake URL `http://localhost:9000/fake-s3/...`. Замена на S3 — в
+  `app/clients/media_storage.py`.
+- **Web viewer** — выключен, см. выше.
 
 ---
 
-## Итог
+## Куда смотреть разным ролям
 
-`nn-service` уже содержит готовый каркас для production-подхода:
+**CV engineer:**
+- `app/adapters/yolo_detector.py` — модель и трекинг;
+- `app/services/zone_scenario_engine.py` + `event_tracker.py` — сценарии;
+- `app/adapters/zone_manager.py` — работа с полигонами;
+- `app/domain/models.py` — контракты между слоями.
 
-- многопоточная обработка нескольких камер;
-- устойчивое чтение RTSP;
-- отделение детектора от сценариев;
-- работа со snapshot и clip;
-- интеграция с `event-srv`;
-- подготовленная точка для замены stub storage на реальный S3.
+**Backend / integration engineer:**
+- `app/clients/event_service.py`, `app/clients/media_storage.py`;
+- `app/services/pipeline.py`;
+- `docker-compose.yml`, `.env`.
 
-Главная идея проекта — дать CV-инженеру возможность сосредоточиться только на:
-- модели,
-- детекциях,
-- сценариях,
-
-а не тратить время на инфраструктурную обвязку.
+**DevOps / infra:**
+- `docker-compose.yml`, `Dockerfile`, `.env`;
+- `docker/openvpn/`.

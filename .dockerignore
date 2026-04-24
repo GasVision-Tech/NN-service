@@ -1,0 +1,38 @@
+# Уменьшаем docker build context:
+# отправляем в образ только то, что нужно рантайму.
+
+# --- Python / venv ---
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Runtime output ---
+storage/
+
+# --- Git / CI / IDE ---
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+.DS_Store
+
+# --- Большие артефакты ---
+models/*.pt
+models/*.onnx
+models/*.engine
+
+# --- Скрипты для ноутбука, внутри контейнера не нужны ---
+scripts/
+
+# --- Документация ---
+README.md
+RUNBOOK.md
+ARCHITECTURE.md
+basilio.txt
+notes.md

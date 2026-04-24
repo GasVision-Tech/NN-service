@@ -1,0 +1,48 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtualenvs ---
+venv/
+.venv/
+env/
+.env/
+
+# --- Secrets / local config ---
+# если появятся реальные креды, переносим в .env.local.
+.env.local
+.env.*.local
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- Runtime media (пишется pipeline'ом) ---
+storage/
+*.mp4
+*.mov
+*.avi
+
+# --- YOLO weights ---
+models/*.pt
+models/*.onnx
+models/*.engine
+
+# # --- Locally-generated zones ---
+# config/zones/*.json
+# !config/zones/_template.json
+
+# --- Ad-hoc заметки ---
+notes.md
+scratch/
