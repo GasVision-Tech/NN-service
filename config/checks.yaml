@@ -34,16 +34,15 @@ implemented_checks:
       дольше PERSON_TOO_LONG_AT_STATION_SEC. При наличии station_zones —
       ограничивается ими; без JSON работает на полный кадр.
 
-  - key: car_too_long_at_station
-    title: Долгое нахождение машины на станции
+  - key: car_too_long_at_column
+    title: Долгое нахождение машины на станции / у колонки
     severity: low
     timer_env: CAR_TOO_LONG_SEC                  # default 300 сек
     requires_zones: false                        # full-frame fallback ок
     notes: |
-      Машина дольше CAR_TOO_LONG_SEC где-либо на территории АЗС.
-      Принципиально использует station_zones (а не column_zones) —
-      нам важна стоянка машины на всей территории, не только у ТРК.
-      Без размеченных station_zones — full-frame fallback на весь кадр.
+      Машина дольше CAR_TOO_LONG_SEC у колонки. При отсутствии
+      column_zones работает на полный кадр — то есть фактически "машина
+      долго на станции". С зонами — точнее (только машины у ТРК).
 
   - key: person_in_forbidden_zone
     title: Пересечение запретной зоны
@@ -72,7 +71,7 @@ implemented_checks:
 defaults:
   enabled_checks:
     - person_too_long_at_station
-    - car_too_long_at_station
+    - car_too_long_at_column
     - person_in_forbidden_zone
 
 
@@ -84,21 +83,21 @@ cameras:
   CAM-167:
     station_code: AZS-001
     enabled_checks:
-      - car_too_long_at_station
+      - car_too_long_at_column
       - person_in_forbidden_zone
       - person_too_long_at_station
 
   CAM-168:
     station_code: AZS-001
     enabled_checks:
-      - car_too_long_at_station
+      - car_too_long_at_column
       - person_in_forbidden_zone
       - person_too_long_at_station
 
   CAM-169B:
     station_code: AZS-001
     enabled_checks:
-      - car_too_long_at_station
+      - car_too_long_at_column
       - person_in_forbidden_zone
       - person_too_long_at_station
 
@@ -116,12 +115,12 @@ cameras:
   CAM-172:
     station_code: AZS-001
     enabled_checks:
-      - car_too_long_at_station
+      - car_too_long_at_column
       - person_in_forbidden_zone
       - person_too_long_at_station
 
 # =============================================================================
-# ROADMAP — не реализовано. Список по этапам, как договаривались.
+# ROADMAP — не реализовано.
 # Ключи (`key`) — рабочие названия, могут поменяться при реализации.
 # =============================================================================
 roadmap:
