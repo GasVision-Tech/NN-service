@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
 
     streams_config_path: str = Field(default="/app/config/streams.yaml")
+    # Путь до конфига per-camera проверок. Если файл отсутствует — фильтрация
+    # по проверкам отключается, движок гоняет все реализованные сценарии.
+    checks_config_path: str = Field(default="/app/config/checks.yaml")
 
     event_service_base_url: str = Field(default="http://event-service:8000")
     event_source: str = Field(default="cv")

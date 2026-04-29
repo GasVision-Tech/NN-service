@@ -48,11 +48,16 @@ YoloTrackingDetector  →  DetectionBatch { label, bbox, confidence, track_id }
 | `person_in_forbidden_zone`      | Человек в запретной зоне                             | 0 сек                          | high     |
 | `person_without_car_at_column`  | Человек у колонки без машины в радиусе               | `PERSON_WITHOUT_CAR_SEC`       | med      |
 | `person_too_long_at_station`    | Человек долго на территории                          | `PERSON_TOO_LONG_AT_STATION_SEC` | med    |
-| `car_too_long_at_column`        | Машина долго у колонки                               | `CAR_TOO_LONG_SEC`             | low      |
+| `car_too_long_at_station`        | Машина долго на территории АЗС                       | `CAR_TOO_LONG_SEC`             | low      |
 
-Первые два требуют зон. Последние два работают на full-frame при отсутствии
-`config/zones/<CAM>.json` (`load_zones_or_fallback` синтезирует station/column
-на весь кадр из `FALLBACK_FRAME_WIDTH/HEIGHT`).
+`person_in_forbidden_zone` требует размеченные `forbidden_zones`,
+`person_without_car_at_column` — `column_zones`. Последние два
+(`person_too_long_at_station`, `car_too_long_at_station`) работают на
+station_zones; при отсутствии JSON `load_zones_or_fallback` синтезирует
+station-полигон на весь кадр из `FALLBACK_FRAME_WIDTH/HEIGHT`. Машины
+матчатся именно против station_zones, а не column_zones — даже если
+column'ы для камеры размечены, проверка «машина долго на АЗС» считает
+всю территорию станции.
 
 ---
 

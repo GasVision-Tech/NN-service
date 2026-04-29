@@ -14,8 +14,11 @@ class StreamConfig:
     enabled: bool = True
     # Опциональный путь до JSON с зонами (forbidden/column/station).
     # Если None — камера работает без зон, стреляют только таймерные сценарии
-    # (person_too_long_at_station / car_too_long_at_column) на всё изображение.
+    # (person_too_long_at_station / car_too_long_at_station) на всё изображение.
     zones_config_path: str | None = None
+    # Какие проверки активны для этой камеры. Если None — фильтра нет, движок
+    # отдаёт все триггеры наверх. Заполняется из config/checks.yaml в runner.
+    enabled_checks: frozenset[str] | None = None
 
 
 @dataclass(slots=True)

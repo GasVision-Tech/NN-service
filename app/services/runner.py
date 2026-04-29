@@ -16,7 +16,7 @@ from app.services.event_tracker import EventTracker
 from app.services.media_builder import MediaBuilder
 from app.services.pipeline import StreamPipeline
 from app.services.zone_scenario_engine import ZoneScenarioEngine
-from app.utils.config_loader import load_streams_config
+from app.utils.config_loader import load_checks_config, load_streams_config
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,18 @@ class PipelineRunner:
         streams = load_streams_config(self._settings.streams_config_path)
         if not streams:
             raise RuntimeError("No enabled streams found in streams config")
+
+        # Per-camera enabled_checks из config/checks.yaml. Если файла нет —
+        # ChecksConfig.for_camera() везде вернёт None, фильтрация отключится
+        # (полная обратная совместимость с поведением "всё включено").
+        checks_cfg = load_checks_config(self._settings.checks_config_path)
+        for stream in streams:
+            stream.enabled_checks = checks_cfg.for_camera(stream.camera_code)
+            if stream.enabled_checks is not None:
+                logger.info(
+                    "Camera %s: enabled checks = %s",
+                    stream.camera_code, sorted(stream.enabled_checks),
+                )
 
         event_client = EventServiceClient(
             base_url=self._settings.event_service_base_url,
@@ -179,6 +191,7 @@ class PipelineRunner:
             media_bucket=settings.media_bucket,
             frame_store=frame_store,
             detection_save_dir=detection_save_dir,
+            enabled_checks=stream.enabled_checks,
         )
 
         thread = threading.Thread(

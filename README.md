@@ -43,10 +43,10 @@ RTSP reconnect, snapshot/clip, upload, HTTP-клиент event-service)
 | `person_in_forbidden_zone`        | Человек в запретной зоне                                               | 0 сек (мгновенно)        | high     |
 | `person_without_car_at_column`    | Человек у колонки дольше порога, при этом рядом нет машины             | `PERSON_WITHOUT_CAR_SEC` | med      |
 | `person_too_long_at_station`      | Человек на территории АЗС дольше порога                                | `PERSON_TOO_LONG_*_SEC`  | med      |
-| `car_too_long_at_column`          | Машина у колонки дольше порога                                         | `CAR_TOO_LONG_SEC`       | low      |
+| `car_too_long_at_station`          | Машина дольше порога на территории АЗС                                 | `CAR_TOO_LONG_SEC`       | low      |
 
 Для `person_in_forbidden_zone` и `person_without_car_at_column` нужна зонная
-разметка. Для `person_too_long_at_station` и `car_too_long_at_column` при
+разметка. Для `person_too_long_at_station` и `car_too_long_at_station` при
 отсутствии JSON зон включается full-frame fallback (вся картинка как
 station/column).
 

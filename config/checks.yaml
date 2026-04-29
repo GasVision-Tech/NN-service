@@ -1,0 +1,226 @@
+# =============================================================================
+# config/checks.yaml — настройка CV-проверок по камерам.
+#
+# Один источник правды (SSoT) для того, какие сценарии активны на какой камере
+# и какие планируются в следующих этапах. Имена реализованных проверок (`key`)
+# совпадают с `scenario_key` из app/services/event_tracker.py — менять только
+# вместе с кодом.
+#
+# Что движок реально читает:
+#   - блок `defaults.enabled_checks`  → fallback для камер не из `cameras`
+#   - блок `cameras.<CODE>.enabled_checks` → точечный оверрайд на камеру
+#
+# Блоки `implemented_checks` и `roadmap` — только документация, движок их
+# игнорирует. Если файла нет — фильтрация выключается, движок отдаёт все
+# триггеры (полная обратная совместимость).
+#
+# Где ловится фильтр: app/services/pipeline.py, после ZoneScenarioEngine.evaluate().
+# EventTracker состояние не теряет — выключенный сценарий просто не доходит
+# до создания события в event-service.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Этап 1 — реализовано в коде (ключи — это scenario_key из event_tracker.py)
+# -----------------------------------------------------------------------------
+implemented_checks:
+  - key: person_too_long_at_station
+    title: Долгое нахождение человека на станции
+    severity: med
+    timer_env: PERSON_TOO_LONG_AT_STATION_SEC   # default 120 сек
+    requires_zones: false                        # full-frame fallback ок
+    notes: |
+      Срабатывает, если человек непрерывно виден на территории АЗС
+      дольше PERSON_TOO_LONG_AT_STATION_SEC. При наличии station_zones —
+      ограничивается ими; без JSON работает на полный кадр.
+
+  - key: car_too_long_at_station
+    title: Долгое нахождение машины на станции
+    severity: low
+    timer_env: CAR_TOO_LONG_SEC                  # default 300 сек
+    requires_zones: false                        # full-frame fallback ок
+    notes: |
+      Машина дольше CAR_TOO_LONG_SEC где-либо на территории АЗС.
+      Принципиально использует station_zones (а не column_zones) —
+      нам важна стоянка машины на всей территории, не только у ТРК.
+      Без размеченных station_zones — full-frame fallback на весь кадр.
+
+  - key: person_in_forbidden_zone
+    title: Пересечение запретной зоны
+    severity: high
+    timer_env: ~                                  # 0 сек, мгновенно
+    requires_zones: true                          # нужна forbidden_zones
+    notes: |
+      Срабатывает в момент входа человека в запретный полигон. Без JSON
+      зон сценарий молчит (некуда заходить).
+
+  # Реализовано, но в дефолтную ротацию по запросу не включено.
+  - key: person_without_car_at_column
+    title: Человек у колонки без машины рядом
+    severity: med
+    timer_env: PERSON_WITHOUT_CAR_SEC             # default 30 сек
+    requires_zones: true                          # нужны column_zones
+    notes: |
+      Человек у ТРК дольше PERSON_WITHOUT_CAR_SEC без авто в радиусе
+      PERSON_CAR_PROXIMITY_PX. Используется при необходимости.
+
+
+# -----------------------------------------------------------------------------
+# Defaults — какие проверки крутить, если в `cameras` камера не перечислена.
+# Сейчас выбраны три проверки этапа 1.
+# -----------------------------------------------------------------------------
+defaults:
+  enabled_checks:
+    - person_too_long_at_station
+    - car_too_long_at_station
+    - person_in_forbidden_zone
+
+
+# -----------------------------------------------------------------------------
+# Per-camera overrides. Указывай камеру здесь, только если её набор отличается
+# от defaults. station_code оставлен явно для удобства, движку он не нужен.
+# -----------------------------------------------------------------------------
+cameras:
+  CAM-167:
+    station_code: AZS-001
+    enabled_checks:
+      - car_too_long_at_station
+      - person_in_forbidden_zone
+      - person_too_long_at_station
+
+  CAM-168:
+    station_code: AZS-001
+    enabled_checks:
+      - car_too_long_at_station
+      - person_in_forbidden_zone
+      - person_too_long_at_station
+
+  CAM-169B:
+    station_code: AZS-001
+    enabled_checks:
+      - car_too_long_at_station
+      - person_in_forbidden_zone
+      - person_too_long_at_station
+
+  CAM-170:
+    station_code: AZS-001
+    enabled_checks:
+      - person_in_forbidden_zone
+      - person_without_car_at_column
+
+  CAM-171:
+    station_code: AZS-001
+    enabled_checks:
+      - person_in_forbidden_zone
+
+  CAM-172:
+    station_code: AZS-001
+    enabled_checks:
+      - car_too_long_at_station
+      - person_in_forbidden_zone
+      - person_too_long_at_station
+
+# =============================================================================
+# ROADMAP — не реализовано. Список по этапам, как договаривались.
+# Ключи (`key`) — рабочие названия, могут поменяться при реализации.
+# =============================================================================
+roadmap:
+
+  # ---------------------------------------------------------------------------
+  # Этап 2
+  # ---------------------------------------------------------------------------
+  stage_2:
+    - key: correct_vehicle_entry_exit
+      title: Правильный заезд и выезд авто с зоны заправки
+      severity: med
+      depends_on:
+        - per-camera entry/exit полигоны (новые типы зон)
+        - direction-aware tracking (вектор движения трека)
+      notes: |
+        Нужно знать "правильную" сторону подъезда. Считаем сценарий
+        нарушенным, если трек авто пересекает выходной полигон до того,
+        как побывал во входном (и наоборот). Реализуется поверх
+        ByteTrack-истории.
+
+    - key: foreign_objects
+      title: Посторонние предметы (канистры, коробки, пакеты)
+      severity: high
+      depends_on:
+        - "кастомная модель — fine-tune YOLO на классы jerry_can, box, bag, oil_drum"
+        - "либо anomaly-detection (background subtraction + классификатор)"
+      notes: |
+        В стандартных классах COCO канистры/коробки отсутствуют. Самый
+        дешёвый путь — fine-tune YOLOv8 на собственном датасете АЗС.
+
+    - key: person_fast_movement_near_pump
+      title: Резкое перемещение человека у ТРК (скорость объекта)
+      severity: high
+      depends_on:
+        - метрические оценки скорости из ByteTrack-трека
+          (px/sec, далее калибровка в м/с по зоне)
+        - порог скорости в .env, например PERSON_FAST_PX_PER_SEC
+      notes: |
+        Готового instrumentation скорости в EventTracker сейчас нет —
+        добавить расчёт ds/dt по предыдущей точке трека и пороговый
+        алерт.
+
+  # ---------------------------------------------------------------------------
+  # Этап 3
+  # ---------------------------------------------------------------------------
+  stage_3:
+    - key: nozzle_torn_off
+      title: Срыв заправочного пистолета
+      severity: critical
+      depends_on:
+        - детектор пистолета и шланга (кастомная модель)
+        - резкое смещение пистолета относительно ТРК + натянутый шланг
+      notes: |
+        Альтернатива — детект "пистолет вне зоны ТРК + авто движется".
+        Требует детектор pump_nozzle.
+
+    - key: incorrect_refueling
+      title: Неправильная заправка (пистолет далеко от ТРК)
+      severity: high
+      depends_on:
+        - детектор pump_nozzle (та же модель, что и для срыва)
+        - связка nozzle_id ↔ column_zone
+      notes: |
+        Срабатывает, когда детектится пистолет, но он не в polygon-е
+        своей колонки и не вставлен в авто. Логика поверх детектора
+        пистолета.
+
+  # ---------------------------------------------------------------------------
+  # Этап 4
+  # ---------------------------------------------------------------------------
+  stage_4:
+    - key: smoke_or_fire
+      title: Задымление / пожар
+      severity: critical
+      depends_on:
+        - "модель smoke/fire detection — например готовая yolov8-fire-smoke"
+        - "либо классический ИК-канал с камеры (если есть)"
+      notes: |
+        Лучше отдельной моделью параллельно YOLO — не смешивать с
+        general-purpose детектором. Высокий приоритет в очереди событий.
+
+    - key: fuel_spill
+      title: Розлив топлива
+      severity: critical
+      depends_on:
+        - segmentation-модель на лужи / отражения
+        - либо обнаружение характерных цветовых паттернов на асфальте
+      notes: |
+        Самый сложный пункт визуально — сильно зависит от освещения и
+        покрытия. Возможно, имеет смысл сочетать с косвенными признаками
+        (долгая стоянка авто + потёки рядом).
+
+    - key: collision
+      title: ДТП / наезд на инфраструктуру
+      severity: critical
+      depends_on:
+        - bounding-box overlap car ↔ static infra (колонка, навес, столб)
+        - резкая остановка трека после ускорения
+      notes: |
+        Геометрическая проверка поверх существующего трекинга: пересечение
+        bbox авто с заранее размеченными infra_zones + событие "трек
+        остановился". infra_zones — новый тип зон.

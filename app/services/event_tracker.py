@@ -33,7 +33,7 @@ class EventType(str, Enum):
     PERSON_IN_FORBIDDEN = "person_in_forbidden_zone"
     PERSON_WITHOUT_CAR = "person_without_car_at_column"
     PERSON_TOO_LONG = "person_too_long_at_station"
-    CAR_TOO_LONG = "car_too_long_at_column"
+    CAR_TOO_LONG_AT_STATION = "car_too_long_at_station"
 
 
 # Severity mapping для отправки в event-service (low|med|high)
@@ -41,7 +41,7 @@ SEVERITY_BY_EVENT: Dict[EventType, str] = {
     EventType.PERSON_IN_FORBIDDEN: "high",
     EventType.PERSON_WITHOUT_CAR: "med",
     EventType.PERSON_TOO_LONG: "med",
-    EventType.CAR_TOO_LONG: "low",
+    EventType.CAR_TOO_LONG_AT_STATION: "low",
 }
 
 
@@ -52,8 +52,8 @@ def _title_for(event_type: EventType, track_id: int, zone_id: str, elapsed: floa
         return f"Человек #{track_id} у колонки «{zone_id}» без авто {elapsed:.0f}с"
     if event_type == EventType.PERSON_TOO_LONG:
         return f"Человек #{track_id} на АЗС уже {elapsed:.0f}с"
-    if event_type == EventType.CAR_TOO_LONG:
-        return f"Машина #{track_id} у колонки «{zone_id}» {elapsed:.0f}с"
+    if event_type == EventType.CAR_TOO_LONG_AT_STATION:
+        return f"Машина #{track_id} на АЗС уже {elapsed:.0f}с"
     return f"{event_type.value} track={track_id}"
 
 
@@ -183,7 +183,7 @@ class EventTracker:
             EventType.PERSON_IN_FORBIDDEN: 0.0,  # стреляет сразу
             EventType.PERSON_WITHOUT_CAR: float(person_without_car_sec),
             EventType.PERSON_TOO_LONG: float(person_too_long_at_station_sec),
-            EventType.CAR_TOO_LONG: float(car_too_long_sec),
+            EventType.CAR_TOO_LONG_AT_STATION: float(car_too_long_sec),
         }
         self._event_cooldown_sec = float(event_cooldown_sec)
 
@@ -195,13 +195,13 @@ class EventTracker:
         self._store_forbidden: Dict[int, TrackedObject] = {}
         self._store_column: Dict[int, TrackedObject] = {}
         self._store_station: Dict[int, TrackedObject] = {}
-        self._store_car_column: Dict[int, TrackedObject] = {}
+        self._store_car_station: Dict[int, TrackedObject] = {}
 
         # Отдельные ReID-матчеры (не путаем person с car)
         self._reid_forbidden = ReIdMatcher(reid_grace_sec, reid_radius_px)
         self._reid_column = ReIdMatcher(reid_grace_sec, reid_radius_px)
         self._reid_station = ReIdMatcher(reid_grace_sec, reid_radius_px)
-        self._reid_car = ReIdMatcher(reid_grace_sec, reid_radius_px)
+        self._reid_car_station = ReIdMatcher(reid_grace_sec, reid_radius_px)
 
     # ------------------------------------------------------------------
     # Публичные update_* — вызываются из ZoneScenarioEngine.
@@ -247,16 +247,16 @@ class EventTracker:
             frame,
         )
 
-    def update_cars_at_column(
+    def update_cars_at_station(
         self,
         active: Dict[int, Tuple[str, Tuple[int, int]]],
         frame: np.ndarray,
     ) -> list[ScenarioTrigger]:
         return self._update(
-            self._store_car_column,
-            self._reid_car,
+            self._store_car_station,
+            self._reid_car_station,
             active,
-            EventType.CAR_TOO_LONG,
+            EventType.CAR_TOO_LONG_AT_STATION,
             frame,
         )
 

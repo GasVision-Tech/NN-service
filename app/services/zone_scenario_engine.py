@@ -94,22 +94,27 @@ class ZoneScenarioEngine:
             persons, self._stations, use_bottom_center=True,
         )
 
-        # --- 4. Car too long at column
-        cars_at_column: Dict[int, Tuple[str, Tuple[int, int]]] = {}
+        # --- 4. Car too long at station
+        # Принципиально матчим против station_zones, а не column_zones — даже
+        # если для камеры размечены column'ы, проверка «машина долго на АЗС»
+        # должна работать по всей территории станции, а не только у ТРК.
+        # Без размеченных station_zones подключается full-frame fallback из
+        # load_zones_or_fallback() — тогда трекаем машины на всей картинке.
+        cars_at_station: Dict[int, Tuple[str, Tuple[int, int]]] = {}
         for det in cars:
             if det.track_id is None:
                 continue
-            pt = bbox_center(det.bbox_xyxy)
-            for zone in self._columns:
+            pt = bbox_bottom_center(det.bbox_xyxy)
+            for zone in self._stations:
                 if point_in_zone(pt, zone):
-                    cars_at_column[det.track_id] = (zone.id, pt)
+                    cars_at_station[det.track_id] = (zone.id, pt)
                     break
 
         triggers: list[ScenarioTrigger] = []
         triggers.extend(self._tracker.update_persons_in_forbidden(persons_in_forbidden, frame))
         triggers.extend(self._tracker.update_persons_at_column(persons_at_column, frame))
         triggers.extend(self._tracker.update_persons_at_station(persons_at_station, frame))
-        triggers.extend(self._tracker.update_cars_at_column(cars_at_column, frame))
+        triggers.extend(self._tracker.update_cars_at_station(cars_at_station, frame))
         return triggers
 
     # ------------------------------------------------------------------

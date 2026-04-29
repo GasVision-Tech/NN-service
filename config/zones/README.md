@@ -28,7 +28,7 @@
 | `person_in_forbidden_zone`                | forbidden        | Не срабатывает                            |
 | `person_without_car_at_column`            | column           | Не срабатывает                            |
 | `person_too_long_at_station`              | station          | Срабатывает на весь кадр (full-frame)     |
-| `car_too_long_at_column`                  | column           | Срабатывает на весь кадр (full-frame)     |
+| `car_too_long_at_station`                 | station          | Срабатывает на весь кадр (full-frame)     |
 
 Если файл `zones_config_path` не существует — `load_zones_or_fallback`
 синтезирует `station` и `column` на всё изображение, так что таймерные

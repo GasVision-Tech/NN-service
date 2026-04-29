@@ -32,7 +32,7 @@ ls -lh models/
 ### 1.2. (Опционально) Разметить зоны
 
 Без разметки камеры запустятся: `person_too_long_at_station` и
-`car_too_long_at_column` работают на full-frame. `person_in_forbidden_zone`
+`car_too_long_at_station` работают на full-frame. `person_in_forbidden_zone`
 и `person_without_car_at_column` начинают стрелять только после появления
 соответствующего JSON.
 

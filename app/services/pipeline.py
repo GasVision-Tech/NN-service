@@ -52,6 +52,7 @@ class StreamPipeline:
         media_bucket: str,
         frame_store: FrameStore | None = None,
         detection_save_dir: Path | None = None,
+        enabled_checks: frozenset[str] | None = None,
     ) -> None:
         self._stream = stream
         self._detector = detector
@@ -66,6 +67,10 @@ class StreamPipeline:
         self._media_bucket = media_bucket
         self._frame_store = frame_store
         self._detection_save_dir = detection_save_dir
+        # Фильтр сценариев: None — пропускаем все триггеры, frozenset —
+        # только те, чей scenario_key есть в множестве. EventTracker всё ещё
+        # ведёт state по всем сценариям, отрезаем именно отправку события.
+        self._enabled_checks = enabled_checks
         if detection_save_dir is not None:
             detection_save_dir.mkdir(parents=True, exist_ok=True)
         self._reader = RTSPReader(stream.rtsp_url, reconnect_delay_seconds=reconnect_delay_seconds)
@@ -92,6 +97,12 @@ class StreamPipeline:
                 continue
 
             for trigger in triggers:
+                # Per-camera проверка из config/checks.yaml. Если для камеры
+                # сценарий выключен — тихо отбрасываем триггер. EventTracker
+                # внутреннее состояние не сбрасывает, чтобы при повторном
+                # включении проверки не было всплеска повторных событий.
+                if self._enabled_checks is not None and trigger.scenario_key not in self._enabled_checks:
+                    continue
                 # Extra-cautious camera-level cooldown: по ключу
                 # (scenario_key, track_id). Основной антидабл уже в EventTracker.
                 cooldown_key = (
