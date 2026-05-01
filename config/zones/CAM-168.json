@@ -1,0 +1,68 @@
+{
+  "forbidden_zones": [
+    {
+      "id": "forbidden_1",
+      "name": "Zone forbidden_1",
+      "polygon": [
+        [
+          2,
+          159
+        ],
+        [
+          88,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": "forbidden_2",
+      "name": "Zone forbidden_2",
+      "polygon": [
+        [
+          217,
+          35
+        ],
+        [
+          233,
+          38
+        ],
+        [
+          251,
+          78
+        ],
+        [
+          242,
+          87
+        ]
+      ]
+    },
+    {
+      "id": "forbidden_3",
+      "name": "Zone forbidden_3",
+      "polygon": [
+        [
+          282,
+          251
+        ],
+        [
+          308,
+          243
+        ],
+        [
+          318,
+          286
+        ],
+        [
+          288,
+          286
+        ]
+      ]
+    }
+  ],
+  "column_zones": [],
+  "station_zones": []
+}

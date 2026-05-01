@@ -9,6 +9,8 @@
     python scripts/draw_zones.py --rtsp rtsp://admin:admin@172.20.36.167/live/sub \
                                  --camera-code CAM-167
 
+--20 sec forbidden zone--
+
     # Или из снимка:
     python scripts/draw_zones.py --image /path/to/frame.jpg --camera-code CAM-167
 

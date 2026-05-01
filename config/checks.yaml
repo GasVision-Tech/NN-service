@@ -105,7 +105,6 @@ cameras:
     station_code: AZS-001
     enabled_checks:
       - person_in_forbidden_zone
-      - person_without_car_at_column
 
   CAM-171:
     station_code: AZS-001

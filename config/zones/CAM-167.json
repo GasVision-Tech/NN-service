@@ -1,0 +1,50 @@
+{
+  "forbidden_zones": [
+    {
+      "id": "forbidden_1",
+      "name": "Zone forbidden_1",
+      "polygon": [
+        [
+          92,
+          162
+        ],
+        [
+          118,
+          191
+        ],
+        [
+          62,
+          284
+        ],
+        [
+          38,
+          244
+        ]
+      ]
+    },
+    {
+      "id": "forbidden_2",
+      "name": "Zone forbidden_2",
+      "polygon": [
+        [
+          218,
+          18
+        ],
+        [
+          230,
+          25
+        ],
+        [
+          206,
+          60
+        ],
+        [
+          192,
+          49
+        ]
+      ]
+    }
+  ],
+  "column_zones": [],
+  "station_zones": []
+}
